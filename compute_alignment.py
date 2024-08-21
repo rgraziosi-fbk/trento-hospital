@@ -86,9 +86,12 @@ def build_petri_net_for_week(prev, year_week_department):
 def compute_alignment(
   dataset,
   output_path='output',
+  output_filename='results.json',
   urgency_types_to_consider=['Elezione'],
   should_save_petri_nets=False
 ):
+  print('Computing alignments...')
+  
   # keep only specified types of operations
   dataset = dataset[dataset[URGENCY_TYPE_KEY].isin(urgency_types_to_consider)]
 
@@ -140,5 +143,5 @@ def compute_alignment(
     results[year_week_department] = alignment_res
 
   # save results to json file
-  with open(os.path.join(output_path, 'results.json'), 'w') as f:
+  with open(os.path.join(output_path, output_filename), 'w') as f:
     json.dump(results, f, indent=2)
