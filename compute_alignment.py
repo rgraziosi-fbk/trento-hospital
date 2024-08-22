@@ -59,9 +59,6 @@ def build_petri_net_for_week(prev, year_week_department, should_consider_reserve
     for _, op_date in ops_date.iterrows():
       is_reserve = op_date[RESERVE_KEY] == 1
 
-      if is_reserve and should_consider_reserves:
-        print(f'Found reserve operation: {year_week_department} - {op_date[ACTIVITY_KEY]}')
-
       p1 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-1')
       p2 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-2')
 
