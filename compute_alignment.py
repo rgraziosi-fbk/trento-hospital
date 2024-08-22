@@ -19,7 +19,7 @@ def cast_df(df):
 
   return df
 
-def build_petri_net_for_week(prev, year_week_department):
+def build_petri_net_for_week(prev, year_week_department, should_consider_reserves=True):
   # ottieni operazioni solo per specifico anno, settimana e reparto
   ops = prev[prev[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
 
@@ -37,21 +37,35 @@ def build_petri_net_for_week(prev, year_week_department):
 
   # sources conterrà i places di partenza (in cui verranno messi i token iniziali)
   sources = []
+
+  # al tempo t, current_reserves conterrà le operazioni che posso essere eseguite sia a t che a t+1
+  current_reserves = []
+
   prev_day_t = None
 
   # per ogni giorno
-  for i, date in enumerate(dates):
+  for day_idx, date in enumerate(dates):
     ops_date = ops[ops[TIMESTAMP_KEY] == date] # operazioni di quello specifico giorno
 
-    next_day_t = PetriNet.Transition(f'day-{i}')
+    next_day_t = PetriNet.Transition(f'day-{day_idx}')
     net.transitions.add(next_day_t)
 
+    if should_consider_reserves:
+      for reserve in current_reserves:
+        petri_utils.add_arc_from_to(reserve, next_day_t, net)
+      current_reserves = []
+
     # per ogni operazione di quel giorno
-    for j, op_date in ops_date.iterrows():
+    for _, op_date in ops_date.iterrows():
+      is_reserve = op_date[RESERVE_KEY] == 1
+
+      if is_reserve and should_consider_reserves:
+        print(f'Found reserve operation: {year_week_department} - {op_date[ACTIVITY_KEY]}')
+
       p1 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-1')
       p2 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-2')
 
-      if i == 0:
+      if day_idx == 0:
         sources.append(p1)
 
       t = PetriNet.Transition(op_date[ACTIVITY_KEY], op_date[ACTIVITY_KEY])
@@ -65,13 +79,23 @@ def build_petri_net_for_week(prev, year_week_department):
 
       petri_utils.add_arc_from_to(p1, t, net)
       petri_utils.add_arc_from_to(t, p2, net)
-      petri_utils.add_arc_from_to(p2, next_day_t, net)
+
+      if should_consider_reserves and is_reserve:
+        current_reserves.append(p2) # p2 must be linked to next_day_t on next iteration
+      else:
+        petri_utils.add_arc_from_to(p2, next_day_t, net)
 
     prev_day_t = next_day_t
 
   sink = PetriNet.Place('sink')
   net.places.add(sink)
   petri_utils.add_arc_from_to(prev_day_t, sink, net)
+
+  if should_consider_reserves:
+    # if some reserves are left, link them to sink
+    for reserve in current_reserves:
+      petri_utils.add_arc_from_to(reserve, next_day_t, net)
+    current_reserves = []
 
   # inserisci token iniziali
   im = Marking()
@@ -88,6 +112,7 @@ def compute_alignment(
   output_path='output',
   output_filename='results.json',
   urgency_types_to_consider=['Elezione'],
+  should_consider_reserves=True,
   should_save_petri_nets=False
 ):
   print('Computing alignments...')
@@ -104,7 +129,11 @@ def compute_alignment(
     prev, act = dataset[dataset[SLICE_KEY] == SLICE_PREV_VAL], dataset[dataset[SLICE_KEY] == SLICE_ACTUAL_VAL]
 
     # costruisci la petri net
-    net, im, fm = build_petri_net_for_week(prev, year_week_department)
+    net, im, fm = build_petri_net_for_week(
+      prev,
+      year_week_department,
+      should_consider_reserves=should_consider_reserves
+    )
 
     if net == None:
       skipped.append(year_week_department)
@@ -116,7 +145,7 @@ def compute_alignment(
         if not os.path.exists(petri_nets_path):
           os.makedirs(petri_nets_path)
         
-        pm4py.save_vis_petri_net(net, im, fm, os.path.join(petri_nets_path, f'{year_week_department}.svg'))
+        pm4py.save_vis_petri_net(net, im, fm, os.path.join(petri_nets_path, f'{year_week_department}-{should_consider_reserves}.svg'))
 
       # generate traces from petrinet
       # log = pm4py.play_out(net, im, fm)
