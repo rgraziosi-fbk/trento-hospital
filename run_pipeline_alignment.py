@@ -4,7 +4,7 @@ import pandas as pd
 
 from config import *
 from compute_alignment import compute_alignment
-from analyze_results import compute_average_fitness_by_department, plot_average_fitness_by_department, compute_average_fitness_by_year_week, plot_average_fitness_by_year_week
+from analyze_alignment_results import compute_average_fitness_by_department, plot_average_fitness_by_department, compute_average_fitness_by_year_week, plot_average_fitness_by_year_week
 
 # Create an output folder for this specific pipeline run
 timestamp = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
