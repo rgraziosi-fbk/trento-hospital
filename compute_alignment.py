@@ -9,22 +9,14 @@ from tqdm import tqdm
 import json
 
 from config import *
-
-def cast_df(df):
-  df = df.copy()
-  
-  df[ACTIVITY_KEY] = df[ACTIVITY_KEY].astype(str)
-  df[TIMESTAMP_KEY] = pd.to_datetime(df[TIMESTAMP_KEY], format='%d/%m/%Y')
-  df = df.sort_values(by=TIMESTAMP_KEY)
-
-  return df
+from utils import prepare_df
 
 def build_petri_net_for_week(prev, year_week_department, should_consider_reserves=True):
   # ottieni operazioni solo per specifico anno, settimana e reparto
   ops = prev[prev[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
 
   # conversioni necessarie per evitare errori
-  ops = cast_df(ops)
+  ops = prepare_df(ops, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
 
   # costruisci petri net delle operazioni preventivate per quello specifico reparto di quella specifica settimana
   # il dataframe passato per fare discovery è in pratica una sola traccia (infatti il case_id è Year_Week_Reparto e c'è un solo valore per esso)
@@ -137,7 +129,7 @@ def compute_alignment(
       continue
 
     if should_save_petri_nets:
-      petri_nets_path = os.path.join(output_path, 'petri_nets')
+      petri_nets_path = os.path.join(output_path, 'petri_nets', '_'.join(urgency_types_to_consider))
       if importlib.util.find_spec('graphviz'):
         if not os.path.exists(petri_nets_path):
           os.makedirs(petri_nets_path)
@@ -152,7 +144,7 @@ def compute_alignment(
     act = act[act[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
 
     # conversioni necessarie per evitare errori
-    act = cast_df(act)
+    act = prepare_df(act, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
 
     # conformance checking
     alignment_res = fitness_alignments(
