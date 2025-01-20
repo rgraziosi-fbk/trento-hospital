@@ -53,16 +53,16 @@ def compute_alignment(
   skipped = []
 
   for year_week_department in tqdm(year_week_department_list):
-    # separa operazioni preventivate da effettuate
-    prev, act = dataset[dataset[SLICE_KEY] == SLICE_PREV_VAL], dataset[dataset[SLICE_KEY] == SLICE_ACTUAL_VAL]
+    # split dataset in planned (plans) and actual (acts) operations
+    plans, acts = dataset[dataset[SLICE_KEY] == SLICE_PREV_VAL], dataset[dataset[SLICE_KEY] == SLICE_ACTUAL_VAL]
 
-    if prev[prev[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department].empty or act[act[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department].empty:
+    if plans[plans[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department].empty or acts[acts[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department].empty:
       skipped.append(year_week_department)
       continue
 
-    # costruisci la petri net
+    # build the petri net of the year-week-department
     net, im, fm = build_petri_net_for_week(
-      prev,
+      plans,
       year_week_department,
       year_week_department_key=YEAR_WEEK_DEPARTMENT_KEY,
       activity_key=ACTIVITY_KEY,
@@ -81,64 +81,36 @@ def compute_alignment(
       # log = pm4py.play_out(net, im, fm)
       # pm4py.write_xes(log, f'{year_week_department}.xes')
 
-    # filtra per year_week_department
-    act = act[act[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
-    act = prepare_df(act, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
+    # filter actual operations of the year-week-department
+    acts = acts[acts[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
+    acts = prepare_df(acts, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
 
-    # add 'days' activities
-    new_act = []
+    # add fictional 'days' activities to acts dataframe
+    new_acts = []
 
     year, week = int(year_week_department.split('-')[0]), int(year_week_department.split('-')[1])
     dates = get_days_of_year_week(year, week)
 
-    act_first_date = act[TIMESTAMP_KEY].iloc[0].to_pydatetime()
-    act_last_date = act[TIMESTAMP_KEY].iloc[-1].to_pydatetime()
-
-    # add events for change of day
     for date in dates:
-      if datetime.strptime(date, '%Y-%m-%d') <= act_first_date:
-        new_row = { col: None for col in act.columns }
-        new_row[ACTIVITY_KEY] = date
-        new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
-        new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
-        new_act.append(new_row)
+      # add fictional events for change of day
+      new_row = { col: None for col in acts.columns }
+      new_row[ACTIVITY_KEY] = date
+      new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
+      new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
+      new_acts.append(new_row)
 
+      # add events for actual activities
+      acts_on_date = acts[acts[TIMESTAMP_KEY] == datetime.strptime(date, '%Y-%m-%d')]
+      for _, row in acts_on_date.iterrows():
+        new_acts.append(row)
 
-    for i in range(len(act) - 1):
-      new_act.append(act.iloc[i])
-
-      if act[TIMESTAMP_KEY].iloc[i] != act[TIMESTAMP_KEY].iloc[i+1]:
-        new_row = { col: None for col in act.columns }
-
-        current_date = act[TIMESTAMP_KEY].iloc[i]
-        next_date = act[TIMESTAMP_KEY].iloc[i+1]
-        for date in dates:
-          if datetime.strptime(date, '%Y-%m-%d') > current_date and datetime.strptime(date, '%Y-%m-%d') <= next_date:
-            new_row = { col: None for col in act.columns }
-            new_row[ACTIVITY_KEY] = date
-            new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
-            new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
-            new_act.append(new_row)
-          else:
-            continue
-    
-    new_act.append(act.iloc[-1])
-
-    for date in dates:
-      if datetime.strptime(date, '%Y-%m-%d') > act_last_date:
-        new_row = { col: None for col in act.columns }
-        new_row[ACTIVITY_KEY] = date
-        new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
-        new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
-        new_act.append(new_row)
-
-    new_act = pd.DataFrame(new_act)
-    new_act[ACTIVITY_KEY] = new_act[ACTIVITY_KEY].astype(str)
-    new_act[TIMESTAMP_KEY] = pd.to_datetime(new_act[TIMESTAMP_KEY], format='%Y-%m-%d')
+    acts = pd.DataFrame(new_acts)
+    acts[ACTIVITY_KEY] = acts[ACTIVITY_KEY].astype(str)
+    acts[TIMESTAMP_KEY] = pd.to_datetime(acts[TIMESTAMP_KEY], format='%Y-%m-%d')
 
     # conformance checking
     act_alignment_res = fitness_alignments(
-      new_act,
+      acts,
       net,
       im,
       fm,
@@ -149,7 +121,7 @@ def compute_alignment(
     )
 
     # dummy log with only 'days' activities
-    dummy_log = create_dummy_log(year, week, year_week_department=year_week_department, columns=act.columns)
+    dummy_log = create_dummy_log(year, week, year_week_department=year_week_department, columns=acts.columns)
     dummy_alignment_res = fitness_alignments(
       dummy_log,
       net,

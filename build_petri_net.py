@@ -3,10 +3,10 @@ from pm4py.objects.petri_net.utils import petri_utils
 
 from utils import prepare_df, get_days_of_year_week
 
-# Given the full log as a dataframe and a specific year-week-department
+# Given the full log of planned operations as a dataframe and a specific year-week-department
 # Builds and returns the petri net of that specific week and department
 def build_petri_net_for_week(
-  prev,
+  plans,
   year_week_department,
   year_week_department_key='Year_Week_Reparto',
   activity_key='concept:name',
@@ -16,7 +16,7 @@ def build_petri_net_for_week(
   dates = get_days_of_year_week(year, week)
 
   # get operations only of specific department, year and week
-  ops = prev[prev[year_week_department_key] == year_week_department]
+  ops = plans[plans[year_week_department_key] == year_week_department]
   ops = prepare_df(ops, activity_key=activity_key, timestamp_key=timestamp_key)
 
   # setup pretri net
