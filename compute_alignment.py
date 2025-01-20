@@ -1,6 +1,8 @@
 import os
 import pm4py
 import pandas as pd
+from datetime import datetime
+
 from pm4py.objects.petri_net.obj import PetriNet, Marking
 from pm4py.objects.petri_net.utils import petri_utils
 from pm4py.conformance import fitness_alignments
@@ -9,87 +11,78 @@ from tqdm import tqdm
 import json
 
 from config import *
-from utils import prepare_df
+from utils import prepare_df, get_days_of_year_week
 
-def build_petri_net_for_week(prev, year_week_department, should_consider_reserves=True):
-  # ottieni operazioni solo per specifico anno, settimana e reparto
+def build_petri_net_for_week(prev, year_week_department):
+  year, week = int(year_week_department.split('-')[0]), int(year_week_department.split('-')[1])
+  dates = get_days_of_year_week(year, week)
+
+  # get operations only of specific department, year and week
   ops = prev[prev[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
-
-  # conversioni necessarie per evitare errori
   ops = prepare_df(ops, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
 
-  # costruisci petri net delle operazioni preventivate per quello specifico reparto di quella specifica settimana
-  # il dataframe passato per fare discovery è in pratica una sola traccia (infatti il case_id è Year_Week_Reparto e c'è un solo valore per esso)
-  dates = ops[TIMESTAMP_KEY].unique()
-
+  # setup pretri net
   net = PetriNet(year_week_department)
 
-  if len(dates) == 0:
-    return None, None, None
-
-  # sources conterrà i places di partenza (in cui verranno messi i token iniziali)
-  sources = []
-
-  # al tempo t, current_reserves conterrà le operazioni che posso essere eseguite sia a t che a t+1
-  current_reserves = []
-
+  # previous day transition
   prev_day_t = None
 
-  # per ogni giorno
-  for day_idx, date in enumerate(dates):
-    ops_date = ops[ops[TIMESTAMP_KEY] == date] # operazioni di quello specifico giorno
+  # previous day places
+  prev_day_ps = []
 
-    next_day_t = PetriNet.Transition(f'day-{day_idx}')
+  # source place
+  source = PetriNet.Place(f'{dates[0]}')
+  net.places.add(source)
+
+  # for each date
+  for day_idx, date in enumerate(dates):
+    ops_date = ops[ops[TIMESTAMP_KEY] == date]
+
+    next_day_t = PetriNet.Transition(date, f'{date}')
     net.transitions.add(next_day_t)
 
-    if should_consider_reserves:
-      for reserve in current_reserves:
-        petri_utils.add_arc_from_to(reserve, next_day_t, net)
-      current_reserves = []
+    if day_idx == 0:
+      petri_utils.add_arc_from_to(source, next_day_t, net)
+    else:
+      # arcs from prev day places to current day transition
+      if len(prev_day_ps) > 0:
+        for prev_day_p in prev_day_ps:
+          petri_utils.add_arc_from_to(prev_day_p, next_day_t, net)
+        
+        prev_day_ps = []
+      else:
+        p = PetriNet.Place(f'{date}-empty')
+        net.places.add(p)
+        petri_utils.add_arc_from_to(prev_day_t, p, net)
+        petri_utils.add_arc_from_to(p, next_day_t, net)
 
-    # per ogni operazione di quel giorno
+    # for each operation on that date
     for _, op_date in ops_date.iterrows():
-      is_reserve = op_date[RESERVE_KEY] == 1
-
       p1 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-1')
       p2 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-2')
 
-      if day_idx == 0:
-        sources.append(p1)
+      prev_day_ps.append(p2)
 
-      t = PetriNet.Transition(op_date[ACTIVITY_KEY], op_date[ACTIVITY_KEY])
+      t = PetriNet.Transition(op_date[ACTIVITY_KEY], f'{op_date[ACTIVITY_KEY]}')
 
       net.places.add(p1)
       net.places.add(p2)
       net.transitions.add(t)
 
-      if prev_day_t:
-        petri_utils.add_arc_from_to(prev_day_t, p1, net)  
-
+      petri_utils.add_arc_from_to(next_day_t, p1, net)
       petri_utils.add_arc_from_to(p1, t, net)
       petri_utils.add_arc_from_to(t, p2, net)
 
-      if should_consider_reserves and is_reserve:
-        current_reserves.append(p2) # p2 must be linked to next_day_t on next iteration
-      else:
-        petri_utils.add_arc_from_to(p2, next_day_t, net)
-
     prev_day_t = next_day_t
 
+  # add sink
   sink = PetriNet.Place('sink')
   net.places.add(sink)
   petri_utils.add_arc_from_to(prev_day_t, sink, net)
 
-  if should_consider_reserves:
-    # if some reserves are left, link them to sink
-    for reserve in current_reserves:
-      petri_utils.add_arc_from_to(reserve, next_day_t, net)
-    current_reserves = []
-
-  # inserisci token iniziali
+  # insert token in source
   im = Marking()
-  for source in sources:
-    im[source] = 1
+  im[source] = 1
 
   fm = Marking()
   fm[sink] = 1
@@ -117,16 +110,15 @@ def compute_alignment(
     # separa operazioni preventivate da effettuate
     prev, act = dataset[dataset[SLICE_KEY] == SLICE_PREV_VAL], dataset[dataset[SLICE_KEY] == SLICE_ACTUAL_VAL]
 
+    if prev[prev[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department].empty or act[act[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department].empty:
+      skipped.append(year_week_department)
+      continue
+
     # costruisci la petri net
     net, im, fm = build_petri_net_for_week(
       prev,
-      year_week_department,
-      should_consider_reserves=should_consider_reserves
+      year_week_department
     )
-
-    if net == None:
-      skipped.append(year_week_department)
-      continue
 
     if should_save_petri_nets:
       petri_nets_path = os.path.join(output_path, 'petri_nets', '_'.join(urgency_types_to_consider))
@@ -142,13 +134,66 @@ def compute_alignment(
 
     # filtra per year_week_department
     act = act[act[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
-
-    # conversioni necessarie per evitare errori
     act = prepare_df(act, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
+
+    # add 'days' activities
+    new_act = []
+
+    year, week = int(year_week_department.split('-')[0]), int(year_week_department.split('-')[1])
+    dates = get_days_of_year_week(year, week)
+
+    act_first_date = act[TIMESTAMP_KEY].iloc[0].to_pydatetime()
+    act_last_date = act[TIMESTAMP_KEY].iloc[-1].to_pydatetime()
+
+    # add events for change of day
+    for date in dates:
+      if datetime.strptime(date, '%Y-%m-%d') <= act_first_date:
+        new_row = { col: None for col in act.columns }
+        new_row[ACTIVITY_KEY] = date
+        new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
+        new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
+        new_act.append(new_row)
+      else:
+        break
+
+
+    for i in range(len(act) - 1):
+      new_act.append(act.iloc[i])
+
+      if act[TIMESTAMP_KEY].iloc[i] != act[TIMESTAMP_KEY].iloc[i+1]:
+        new_row = { col: None for col in act.columns }
+
+        current_date = act[TIMESTAMP_KEY].iloc[i]
+        next_date = act[TIMESTAMP_KEY].iloc[i+1]
+        for date in dates:
+          if datetime.strptime(date, '%Y-%m-%d') > current_date and datetime.strptime(date, '%Y-%m-%d') <= next_date:
+            new_row = { col: None for col in act.columns }
+            new_row[ACTIVITY_KEY] = date
+            new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
+            new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
+            new_act.append(new_row)
+          else:
+            continue
+    
+    new_act.append(act.iloc[-1])
+
+    for date in dates:
+      if datetime.strptime(date, '%Y-%m-%d') <= act_last_date:
+        continue
+      else:
+        new_row = { col: None for col in act.columns }
+        new_row[ACTIVITY_KEY] = date
+        new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
+        new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
+        new_act.append(new_row)
+
+    new_act = pd.DataFrame(new_act)
+    new_act[ACTIVITY_KEY] = new_act[ACTIVITY_KEY].astype(str)
+    new_act[TIMESTAMP_KEY] = pd.to_datetime(new_act[TIMESTAMP_KEY], format='%Y-%m-%d')
 
     # conformance checking
     alignment_res = fitness_alignments(
-      act,
+      new_act,
       net,
       im,
       fm,
@@ -163,3 +208,5 @@ def compute_alignment(
   # save results to json file
   with open(os.path.join(output_path, output_filename), 'w') as f:
     json.dump(results, f, indent=2)
+
+  print(skipped)
