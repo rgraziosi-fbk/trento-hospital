@@ -89,6 +89,9 @@ def build_petri_net_for_week(prev, year_week_department):
 
   return net, im, fm
 
+def get_real_fitness(f, f_dummy):
+  return (f - f_dummy) / (1 - f_dummy)
+
 def compute_alignment(
   dataset,
   output_path='output',
@@ -142,6 +145,19 @@ def compute_alignment(
     year, week = int(year_week_department.split('-')[0]), int(year_week_department.split('-')[1])
     dates = get_days_of_year_week(year, week)
 
+    # dummy log with only 'days' activities
+    dummy_log = []
+    for date in dates:
+      new_row = { col: None for col in act.columns }
+      new_row[ACTIVITY_KEY] = date
+      new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
+      new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
+      dummy_log.append(new_row)
+
+    dummy_log = pd.DataFrame(dummy_log)
+    dummy_log[ACTIVITY_KEY] = dummy_log[ACTIVITY_KEY].astype(str)
+    dummy_log[TIMESTAMP_KEY] = pd.to_datetime(dummy_log[TIMESTAMP_KEY], format='%Y-%m-%d')
+
     act_first_date = act[TIMESTAMP_KEY].iloc[0].to_pydatetime()
     act_last_date = act[TIMESTAMP_KEY].iloc[-1].to_pydatetime()
 
@@ -192,7 +208,7 @@ def compute_alignment(
     new_act[TIMESTAMP_KEY] = pd.to_datetime(new_act[TIMESTAMP_KEY], format='%Y-%m-%d')
 
     # conformance checking
-    alignment_res = fitness_alignments(
+    act_alignment_res = fitness_alignments(
       new_act,
       net,
       im,
@@ -203,10 +219,24 @@ def compute_alignment(
       timestamp_key=TIMESTAMP_KEY,
     )
 
+    dummy_alignment_res = fitness_alignments(
+      dummy_log,
+      net,
+      im,
+      fm,
+      multi_processing=False,
+      activity_key=ACTIVITY_KEY,
+      case_id_key=YEAR_WEEK_DEPARTMENT_KEY,
+      timestamp_key=TIMESTAMP_KEY,
+    )
+
+    # perform some trick to get real fitness
+    alignment_res = {}
+    for key in act_alignment_res.keys():
+      alignment_res[key] = get_real_fitness(act_alignment_res[key], dummy_alignment_res[key])
+
     results[year_week_department] = alignment_res
 
   # save results to json file
   with open(os.path.join(output_path, output_filename), 'w') as f:
     json.dump(results, f, indent=2)
-
-  print(skipped)
