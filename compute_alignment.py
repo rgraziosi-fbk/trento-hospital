@@ -3,94 +3,37 @@ import pm4py
 import pandas as pd
 from datetime import datetime
 
-from pm4py.objects.petri_net.obj import PetriNet, Marking
-from pm4py.objects.petri_net.utils import petri_utils
 from pm4py.conformance import fitness_alignments
 import importlib.util
 from tqdm import tqdm
 import json
 
 from config import *
+from build_petri_net import build_petri_net_for_week
 from utils import prepare_df, get_days_of_year_week
 
-def build_petri_net_for_week(prev, year_week_department):
-  year, week = int(year_week_department.split('-')[0]), int(year_week_department.split('-')[1])
+
+def create_dummy_log(year, week, year_week_department, columns):
+  dummy_log = []
   dates = get_days_of_year_week(year, week)
 
-  # get operations only of specific department, year and week
-  ops = prev[prev[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
-  ops = prepare_df(ops, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
+  for date in dates:
+    new_row = { col: None for col in columns }
+    new_row[ACTIVITY_KEY] = date
+    new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
+    new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
+    dummy_log.append(new_row)
 
-  # setup pretri net
-  net = PetriNet(year_week_department)
+  dummy_log = pd.DataFrame(dummy_log)
+  dummy_log[ACTIVITY_KEY] = dummy_log[ACTIVITY_KEY].astype(str)
+  dummy_log[TIMESTAMP_KEY] = pd.to_datetime(dummy_log[TIMESTAMP_KEY], format='%Y-%m-%d')
 
-  # previous day transition
-  prev_day_t = None
+  return dummy_log
 
-  # previous day places
-  prev_day_ps = []
-
-  # source place
-  source = PetriNet.Place(f'{dates[0]}')
-  net.places.add(source)
-
-  # for each date
-  for day_idx, date in enumerate(dates):
-    ops_date = ops[ops[TIMESTAMP_KEY] == date]
-
-    next_day_t = PetriNet.Transition(date, f'{date}')
-    net.transitions.add(next_day_t)
-
-    if day_idx == 0:
-      petri_utils.add_arc_from_to(source, next_day_t, net)
-    else:
-      # arcs from prev day places to current day transition
-      if len(prev_day_ps) > 0:
-        for prev_day_p in prev_day_ps:
-          petri_utils.add_arc_from_to(prev_day_p, next_day_t, net)
-        
-        prev_day_ps = []
-      else:
-        p = PetriNet.Place(f'{date}-empty')
-        net.places.add(p)
-        petri_utils.add_arc_from_to(prev_day_t, p, net)
-        petri_utils.add_arc_from_to(p, next_day_t, net)
-
-    # for each operation on that date
-    for _, op_date in ops_date.iterrows():
-      p1 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-1')
-      p2 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-2')
-
-      prev_day_ps.append(p2)
-
-      t = PetriNet.Transition(op_date[ACTIVITY_KEY], f'{op_date[ACTIVITY_KEY]}')
-
-      net.places.add(p1)
-      net.places.add(p2)
-      net.transitions.add(t)
-
-      petri_utils.add_arc_from_to(next_day_t, p1, net)
-      petri_utils.add_arc_from_to(p1, t, net)
-      petri_utils.add_arc_from_to(t, p2, net)
-
-    prev_day_t = next_day_t
-
-  # add sink
-  sink = PetriNet.Place('sink')
-  net.places.add(sink)
-  petri_utils.add_arc_from_to(prev_day_t, sink, net)
-
-  # insert token in source
-  im = Marking()
-  im[source] = 1
-
-  fm = Marking()
-  fm[sink] = 1
-
-  return net, im, fm
 
 def get_real_fitness(f, f_dummy):
   return (f - f_dummy) / (1 - f_dummy)
+
 
 def compute_alignment(
   dataset,
@@ -120,7 +63,10 @@ def compute_alignment(
     # costruisci la petri net
     net, im, fm = build_petri_net_for_week(
       prev,
-      year_week_department
+      year_week_department,
+      year_week_department_key=YEAR_WEEK_DEPARTMENT_KEY,
+      activity_key=ACTIVITY_KEY,
+      timestamp_key=TIMESTAMP_KEY,
     )
 
     if should_save_petri_nets:
@@ -145,19 +91,6 @@ def compute_alignment(
     year, week = int(year_week_department.split('-')[0]), int(year_week_department.split('-')[1])
     dates = get_days_of_year_week(year, week)
 
-    # dummy log with only 'days' activities
-    dummy_log = []
-    for date in dates:
-      new_row = { col: None for col in act.columns }
-      new_row[ACTIVITY_KEY] = date
-      new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
-      new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
-      dummy_log.append(new_row)
-
-    dummy_log = pd.DataFrame(dummy_log)
-    dummy_log[ACTIVITY_KEY] = dummy_log[ACTIVITY_KEY].astype(str)
-    dummy_log[TIMESTAMP_KEY] = pd.to_datetime(dummy_log[TIMESTAMP_KEY], format='%Y-%m-%d')
-
     act_first_date = act[TIMESTAMP_KEY].iloc[0].to_pydatetime()
     act_last_date = act[TIMESTAMP_KEY].iloc[-1].to_pydatetime()
 
@@ -169,8 +102,6 @@ def compute_alignment(
         new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
         new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
         new_act.append(new_row)
-      else:
-        break
 
 
     for i in range(len(act) - 1):
@@ -194,9 +125,7 @@ def compute_alignment(
     new_act.append(act.iloc[-1])
 
     for date in dates:
-      if datetime.strptime(date, '%Y-%m-%d') <= act_last_date:
-        continue
-      else:
+      if datetime.strptime(date, '%Y-%m-%d') > act_last_date:
         new_row = { col: None for col in act.columns }
         new_row[ACTIVITY_KEY] = date
         new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
@@ -219,6 +148,8 @@ def compute_alignment(
       timestamp_key=TIMESTAMP_KEY,
     )
 
+    # dummy log with only 'days' activities
+    dummy_log = create_dummy_log(year, week, year_week_department=year_week_department, columns=act.columns)
     dummy_alignment_res = fitness_alignments(
       dummy_log,
       net,
@@ -230,7 +161,7 @@ def compute_alignment(
       timestamp_key=TIMESTAMP_KEY,
     )
 
-    # perform some trick to get real fitness
+    # compute real fitness
     alignment_res = {}
     for key in act_alignment_res.keys():
       alignment_res[key] = get_real_fitness(act_alignment_res[key], dummy_alignment_res[key])
