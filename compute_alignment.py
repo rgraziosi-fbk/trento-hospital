@@ -1,100 +1,39 @@
 import os
 import pm4py
 import pandas as pd
-from pm4py.objects.petri_net.obj import PetriNet, Marking
-from pm4py.objects.petri_net.utils import petri_utils
+from datetime import datetime
+
 from pm4py.conformance import fitness_alignments
 import importlib.util
 from tqdm import tqdm
 import json
 
 from config import *
-from utils import prepare_df
+from build_petri_net import build_petri_net_for_week
+from utils import prepare_df, get_days_of_year_week
 
-def build_petri_net_for_week(prev, year_week_department, should_consider_reserves=True):
-  # ottieni operazioni solo per specifico anno, settimana e reparto
-  ops = prev[prev[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
 
-  # conversioni necessarie per evitare errori
-  ops = prepare_df(ops, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
+def create_dummy_log(year, week, year_week_department, columns):
+  dummy_log = []
+  dates = get_days_of_year_week(year, week)
 
-  # costruisci petri net delle operazioni preventivate per quello specifico reparto di quella specifica settimana
-  # il dataframe passato per fare discovery è in pratica una sola traccia (infatti il case_id è Year_Week_Reparto e c'è un solo valore per esso)
-  dates = ops[TIMESTAMP_KEY].unique()
+  for date in dates:
+    new_row = { col: None for col in columns }
+    new_row[ACTIVITY_KEY] = date
+    new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
+    new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
+    dummy_log.append(new_row)
 
-  net = PetriNet(year_week_department)
+  dummy_log = pd.DataFrame(dummy_log)
+  dummy_log[ACTIVITY_KEY] = dummy_log[ACTIVITY_KEY].astype(str)
+  dummy_log[TIMESTAMP_KEY] = pd.to_datetime(dummy_log[TIMESTAMP_KEY], format='%Y-%m-%d')
 
-  if len(dates) == 0:
-    return None, None, None
+  return dummy_log
 
-  # sources conterrà i places di partenza (in cui verranno messi i token iniziali)
-  sources = []
 
-  # al tempo t, current_reserves conterrà le operazioni che posso essere eseguite sia a t che a t+1
-  current_reserves = []
+def get_real_fitness(f, f_dummy):
+  return (f - f_dummy) / (1 - f_dummy)
 
-  prev_day_t = None
-
-  # per ogni giorno
-  for day_idx, date in enumerate(dates):
-    ops_date = ops[ops[TIMESTAMP_KEY] == date] # operazioni di quello specifico giorno
-
-    next_day_t = PetriNet.Transition(f'day-{day_idx}')
-    net.transitions.add(next_day_t)
-
-    if should_consider_reserves:
-      for reserve in current_reserves:
-        petri_utils.add_arc_from_to(reserve, next_day_t, net)
-      current_reserves = []
-
-    # per ogni operazione di quel giorno
-    for _, op_date in ops_date.iterrows():
-      is_reserve = op_date[RESERVE_KEY] == 1
-
-      p1 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-1')
-      p2 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-2')
-
-      if day_idx == 0:
-        sources.append(p1)
-
-      t = PetriNet.Transition(op_date[ACTIVITY_KEY], op_date[ACTIVITY_KEY])
-
-      net.places.add(p1)
-      net.places.add(p2)
-      net.transitions.add(t)
-
-      if prev_day_t:
-        petri_utils.add_arc_from_to(prev_day_t, p1, net)  
-
-      petri_utils.add_arc_from_to(p1, t, net)
-      petri_utils.add_arc_from_to(t, p2, net)
-
-      if should_consider_reserves and is_reserve:
-        current_reserves.append(p2) # p2 must be linked to next_day_t on next iteration
-      else:
-        petri_utils.add_arc_from_to(p2, next_day_t, net)
-
-    prev_day_t = next_day_t
-
-  sink = PetriNet.Place('sink')
-  net.places.add(sink)
-  petri_utils.add_arc_from_to(prev_day_t, sink, net)
-
-  if should_consider_reserves:
-    # if some reserves are left, link them to sink
-    for reserve in current_reserves:
-      petri_utils.add_arc_from_to(reserve, next_day_t, net)
-    current_reserves = []
-
-  # inserisci token iniziali
-  im = Marking()
-  for source in sources:
-    im[source] = 1
-
-  fm = Marking()
-  fm[sink] = 1
-
-  return net, im, fm
 
 def compute_alignment(
   dataset,
@@ -114,19 +53,21 @@ def compute_alignment(
   skipped = []
 
   for year_week_department in tqdm(year_week_department_list):
-    # separa operazioni preventivate da effettuate
-    prev, act = dataset[dataset[SLICE_KEY] == SLICE_PREV_VAL], dataset[dataset[SLICE_KEY] == SLICE_ACTUAL_VAL]
+    # split dataset in planned (plans) and actual (acts) operations
+    plans, acts = dataset[dataset[SLICE_KEY] == SLICE_PREV_VAL], dataset[dataset[SLICE_KEY] == SLICE_ACTUAL_VAL]
 
-    # costruisci la petri net
-    net, im, fm = build_petri_net_for_week(
-      prev,
-      year_week_department,
-      should_consider_reserves=should_consider_reserves
-    )
-
-    if net == None:
+    if plans[plans[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department].empty or acts[acts[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department].empty:
       skipped.append(year_week_department)
       continue
+
+    # build the petri net of the year-week-department
+    net, im, fm = build_petri_net_for_week(
+      plans,
+      year_week_department,
+      year_week_department_key=YEAR_WEEK_DEPARTMENT_KEY,
+      activity_key=ACTIVITY_KEY,
+      timestamp_key=TIMESTAMP_KEY,
+    )
 
     if should_save_petri_nets:
       petri_nets_path = os.path.join(output_path, 'petri_nets', '_'.join(urgency_types_to_consider))
@@ -140,15 +81,36 @@ def compute_alignment(
       # log = pm4py.play_out(net, im, fm)
       # pm4py.write_xes(log, f'{year_week_department}.xes')
 
-    # filtra per year_week_department
-    act = act[act[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
+    # filter actual operations of the year-week-department
+    acts = acts[acts[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
+    acts = prepare_df(acts, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
 
-    # conversioni necessarie per evitare errori
-    act = prepare_df(act, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
+    # add fictional 'days' activities to acts dataframe
+    new_acts = []
+
+    year, week = int(year_week_department.split('-')[0]), int(year_week_department.split('-')[1])
+    dates = get_days_of_year_week(year, week)
+
+    for date in dates:
+      # add fictional events for change of day
+      new_row = { col: None for col in acts.columns }
+      new_row[ACTIVITY_KEY] = date
+      new_row[TIMESTAMP_KEY] = datetime.strptime(date, '%Y-%m-%d')
+      new_row[YEAR_WEEK_DEPARTMENT_KEY] = year_week_department
+      new_acts.append(new_row)
+
+      # add events for actual activities
+      acts_on_date = acts[acts[TIMESTAMP_KEY] == datetime.strptime(date, '%Y-%m-%d')]
+      for _, row in acts_on_date.iterrows():
+        new_acts.append(row)
+
+    acts = pd.DataFrame(new_acts)
+    acts[ACTIVITY_KEY] = acts[ACTIVITY_KEY].astype(str)
+    acts[TIMESTAMP_KEY] = pd.to_datetime(acts[TIMESTAMP_KEY], format='%Y-%m-%d')
 
     # conformance checking
-    alignment_res = fitness_alignments(
-      act,
+    act_alignment_res = fitness_alignments(
+      acts,
       net,
       im,
       fm,
@@ -157,6 +119,24 @@ def compute_alignment(
       case_id_key=YEAR_WEEK_DEPARTMENT_KEY,
       timestamp_key=TIMESTAMP_KEY,
     )
+
+    # dummy log with only 'days' activities
+    dummy_log = create_dummy_log(year, week, year_week_department=year_week_department, columns=acts.columns)
+    dummy_alignment_res = fitness_alignments(
+      dummy_log,
+      net,
+      im,
+      fm,
+      multi_processing=False,
+      activity_key=ACTIVITY_KEY,
+      case_id_key=YEAR_WEEK_DEPARTMENT_KEY,
+      timestamp_key=TIMESTAMP_KEY,
+    )
+
+    # compute real fitness
+    alignment_res = {}
+    for key in act_alignment_res.keys():
+      alignment_res[key] = get_real_fitness(act_alignment_res[key], dummy_alignment_res[key])
 
     results[year_week_department] = alignment_res
 

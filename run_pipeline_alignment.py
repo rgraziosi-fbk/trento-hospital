@@ -4,7 +4,7 @@ import pandas as pd
 
 from config import *
 from compute_alignment import compute_alignment
-from analyze_alignment_results import compute_average_fitness_by_department, plot_average_fitness_by_department, compute_average_fitness_by_year_week, plot_average_fitness_by_year_week
+from analyze_alignment_results import compute_average_fitness_by_department, plot_average_fitness_by_department, compute_average_fitness_by_year_week, compute_fitness_by_year_week_for_each_department, plot_average_fitness_by_year_week, plot_fitness_year_week_for_each_department
 
 # Create an output folder for this specific pipeline run
 timestamp = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
@@ -15,7 +15,8 @@ os.makedirs(run_output_path)
 dataset = pd.read_csv(DATASET_PATH, sep=DATASET_SEP, encoding=DATASET_ENCODING)
 
 # for period, name in zip(['COVID', 'POST_COVID'], ['covid', 'post_covid']):
-for urgency_types_to_consider, name in zip([['Elezione'], ['Elezione', 'Urgenza', 'Emergenza']], ['e', 'eue']):
+# for urgency_types_to_consider, name in zip([['Elezione'], ['Elezione', 'Urgenza', 'Emergenza']], ['e', 'eue']):
+for urgency_types_to_consider, name in zip([['Elezione']], ['e']):
 # for should_consider_reserves, name in zip([True, False], ['reserves', 'noreserves']):
   print(f'Considering case "{name}"...')
 
@@ -32,9 +33,18 @@ for urgency_types_to_consider, name in zip([['Elezione'], ['Elezione', 'Urgenza'
   # Compute average fitness by department
   compute_average_fitness_by_year_week(
     dataset=dataset,
+    input_filename=f'results_{name}.json',
     output_path=run_output_path,
     output_filename=f'average_fitness_by_year_week_{name}.json',
+  )
+
+  # Compute fitness by year_week for each department
+  compute_fitness_by_year_week_for_each_department(
+    dataset=dataset,
+    input_path=run_output_path,
     input_filename=f'results_{name}.json',
+    output_path=os.path.join(run_output_path, 'by_department'),
+    output_filename=f'average_fitness_by_year_week_for_department_{name}.json'
   )
 
 # Plot average fitness by department
@@ -43,6 +53,13 @@ plot_average_fitness_by_year_week(
   output_path=run_output_path,
   input_filenames=[
     'average_fitness_by_year_week_e.json',
-    'average_fitness_by_year_week_eue.json',
+    # 'average_fitness_by_year_week_eue.json',
   ]
+)
+
+# Plot fitness for each department
+plot_fitness_year_week_for_each_department(
+  dataset=dataset,
+  output_path=os.path.join(run_output_path, 'by_department'),
+  input_path=os.path.join(run_output_path, 'by_department'),
 )

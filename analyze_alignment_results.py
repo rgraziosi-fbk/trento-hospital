@@ -132,6 +132,54 @@ def compute_average_fitness_by_year_week(
   with open(os.path.join(output_path, output_filename), 'w') as f:
     json.dump(avg_fitness_by_year_week, f, indent=2)
 
+
+def compute_fitness_by_year_week_for_each_department(
+  dataset,
+  input_path='input',
+  output_path='output',
+  output_filename='average_fitness_by_year_week_for_department.json',
+  input_filename='results.json',
+):
+  with open(os.path.join(input_path, input_filename)) as f:
+    results = json.load(f)
+
+  # get set of year_weeks
+  year_weeks = dataset[YEAR_WEEK_DEPARTMENT_KEY].unique().tolist()
+  year_weeks = [year_week.split('-')[0] + '-' + year_week.split('-')[1] for year_week in year_weeks]
+  year_weeks = list(set(year_weeks))
+
+   # Custom sorting key
+  def sort_key(year_week):
+    year, week = year_week.split('-')
+    return (int(year), int(week))
+  
+  year_weeks = sorted(year_weeks, key=sort_key)
+
+  # get set of departments
+  departments = dataset[YEAR_WEEK_DEPARTMENT_KEY].unique().tolist()
+  departments = [department.split('-')[2] for department in departments]
+  departments = list(set(departments))
+
+  if not os.path.exists(output_path):
+    os.makedirs(output_path, exist_ok=True)
+
+  for department in departments:
+    print(f'Computing fitness by year_week for department {department}...')
+
+    results_by_year_week = { year_week: None for year_week in year_weeks }
+
+    for year_week in year_weeks:
+      if f'{year_week}-{department}' in results:
+        results_by_year_week[year_week] = results[f'{year_week}-{department}']['average_trace_fitness']
+      else:
+        results_by_year_week[year_week] = float('nan')
+
+    current_output_filename = f'{output_filename.split(".json")[0]}_{department}.json'
+
+    with open(os.path.join(output_path, current_output_filename), 'w') as f:
+      json.dump(results_by_year_week, f, indent=2)
+
+
 # Plot fitness media year_week
 def plot_average_fitness_by_year_week(
   dataset,
@@ -178,3 +226,44 @@ def plot_average_fitness_by_year_week(
 
   plt.tight_layout()
   plt.savefig(os.path.join(output_path, output_filename))
+
+
+def plot_fitness_year_week_for_each_department(
+  dataset,
+  output_path='output',
+  output_filename='average_fitness_by_year_week.png',
+  input_path=None,
+):
+  input_filenames = os.listdir(input_path)
+
+  year_weeks = dataset[YEAR_WEEK_DEPARTMENT_KEY].unique().tolist()
+  year_weeks = [year_week.split('-')[0] + '-' + year_week.split('-')[1] for year_week in year_weeks]
+  year_weeks = list(set(year_weeks))
+
+  # Custom sorting key
+  def sort_key(year_week):
+    year, week = year_week.split('-')
+    return (int(year), int(week))
+  
+  year_weeks = sorted(year_weeks, key=sort_key)
+
+  for input_filename in input_filenames:
+    plt.figure(figsize=(10, 6))
+    alpha = 1 if len(input_filenames) == 0 else 0.5
+
+    with open(os.path.join(input_path, input_filename)) as f:
+      fitness_by_year_week = json.load(f)
+
+    plt.bar(year_weeks, fitness_by_year_week.values(), color='skyblue', alpha=alpha, label=input_filename)
+
+    plt.xlabel('Year-Week')
+    plt.ylabel('Fitness')
+    plt.title(input_filename)
+    # plt.legend(title='Input Files', bbox_to_anchor=(1.2, 1), loc='lower right', borderaxespad=0.)
+    plt.xticks(rotation=90)
+
+    plt.tight_layout()
+    current_output_filename = f'{output_filename.split(".png")[0]}_{input_filename.split(".json")[0]}.png'
+    plt.savefig(os.path.join(output_path, current_output_filename))
+
+    plt.clf()
