@@ -5,7 +5,7 @@ DATASET_ENCODING = 'iso-8859-1'
 OUTPUT_PATH = 'output'
 
 SLICE_KEY = 'SLICE'
-SLICE_PREV_VAL = 'preventivato'
+SLICE_PLAN_VAL = 'preventivato'
 SLICE_ACTUAL_VAL = 'actual'
 
 YEAR_WEEK_DEPARTMENT_KEY = 'Year_Week_Reparto'

@@ -271,7 +271,7 @@ def plot_usage_and_overtime_by_department(results):
 dataset = pd.read_csv('dataset.csv', sep=';', encoding='iso-8859-1')
 
 # keep only actual operations
-actual, prev = dataset[dataset[SLICE_KEY] == SLICE_ACTUAL_VAL], dataset[dataset[SLICE_KEY] == SLICE_PREV_VAL]
+actual, prev = dataset[dataset[SLICE_KEY] == SLICE_ACTUAL_VAL], dataset[dataset[SLICE_KEY] == SLICE_PLAN_VAL]
 
 # compute statistics
 compute_room_usage(actual, what_to_plot='usage')

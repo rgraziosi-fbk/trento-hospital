@@ -4,7 +4,7 @@ import pandas as pd
 
 from config import *
 from compute_alignment import compute_alignment
-from analyze_alignment_results import compute_average_fitness_by_department, plot_average_fitness_by_department, compute_average_fitness_by_year_week, plot_average_fitness_by_year_week
+from analyze_alignment_results import compute_average_fitness_for_week, plot_average_fitness_for_week, compute_average_fitness_for_department, plot_average_fitness_for_department
 
 # Create an output folder for this specific pipeline run
 timestamp = datetime.now().strftime('%Y-%m-%d %H-%M-%S')
@@ -29,20 +29,39 @@ for urgency_types_to_consider, name in zip([['Elezione'], ['Elezione', 'Urgenza'
     should_save_petri_nets=True,
   )
 
-  # Compute average fitness by department
-  compute_average_fitness_by_year_week(
+  # Compute average fitness for week across all departments
+  compute_average_fitness_for_week(
     dataset=dataset,
-    output_path=run_output_path,
-    output_filename=f'average_fitness_by_year_week_{name}.json',
     input_filename=f'results_{name}.json',
+    output_path=run_output_path,
+    output_filename=f'average_fitness_for_week_{name}.json',
   )
 
-# Plot average fitness by department
-plot_average_fitness_by_year_week(
+  # Compute average fitness for department across all weeks
+  compute_average_fitness_for_department(
+    dataset,
+    input_filename=f'results_{name}.json',
+    output_path=run_output_path,
+    output_filename=f'average_fitness_for_department_{name}.json',
+  )
+
+
+# Plot average fitness for week across all departments
+plot_average_fitness_for_week(
   dataset=dataset,
-  output_path=run_output_path,
   input_filenames=[
-    'average_fitness_by_year_week_e.json',
-    'average_fitness_by_year_week_eue.json',
-  ]
+    'average_fitness_for_week_e.json',
+    'average_fitness_for_week_eue.json',
+  ],
+  output_path=run_output_path,
+)
+
+# Plot average fitness for department across all weeks
+plot_average_fitness_for_department(
+  dataset,
+  input_filenames=[
+    'average_fitness_for_department_e.json',
+    'average_fitness_for_department_eue.json',
+  ],
+  output_path=run_output_path,
 )

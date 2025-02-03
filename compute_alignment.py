@@ -1,8 +1,5 @@
 import os
 import pm4py
-import pandas as pd
-from pm4py.objects.petri_net.obj import PetriNet, Marking
-from pm4py.objects.petri_net.utils import petri_utils
 from pm4py.conformance import fitness_alignments
 import importlib.util
 from tqdm import tqdm
@@ -10,91 +7,7 @@ import json
 
 from config import *
 from utils import prepare_df
-
-def build_petri_net_for_week(prev, year_week_department, should_consider_reserves=True):
-  # ottieni operazioni solo per specifico anno, settimana e reparto
-  ops = prev[prev[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
-
-  # conversioni necessarie per evitare errori
-  ops = prepare_df(ops, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
-
-  # costruisci petri net delle operazioni preventivate per quello specifico reparto di quella specifica settimana
-  # il dataframe passato per fare discovery è in pratica una sola traccia (infatti il case_id è Year_Week_Reparto e c'è un solo valore per esso)
-  dates = ops[TIMESTAMP_KEY].unique()
-
-  net = PetriNet(year_week_department)
-
-  if len(dates) == 0:
-    return None, None, None
-
-  # sources conterrà i places di partenza (in cui verranno messi i token iniziali)
-  sources = []
-
-  # al tempo t, current_reserves conterrà le operazioni che posso essere eseguite sia a t che a t+1
-  current_reserves = []
-
-  prev_day_t = None
-
-  # per ogni giorno
-  for day_idx, date in enumerate(dates):
-    ops_date = ops[ops[TIMESTAMP_KEY] == date] # operazioni di quello specifico giorno
-
-    next_day_t = PetriNet.Transition(f'day-{day_idx}')
-    net.transitions.add(next_day_t)
-
-    if should_consider_reserves:
-      for reserve in current_reserves:
-        petri_utils.add_arc_from_to(reserve, next_day_t, net)
-      current_reserves = []
-
-    # per ogni operazione di quel giorno
-    for _, op_date in ops_date.iterrows():
-      is_reserve = op_date[RESERVE_KEY] == 1
-
-      p1 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-1')
-      p2 = PetriNet.Place(f'{date}-{op_date[ACTIVITY_KEY]}-2')
-
-      if day_idx == 0:
-        sources.append(p1)
-
-      t = PetriNet.Transition(op_date[ACTIVITY_KEY], op_date[ACTIVITY_KEY])
-
-      net.places.add(p1)
-      net.places.add(p2)
-      net.transitions.add(t)
-
-      if prev_day_t:
-        petri_utils.add_arc_from_to(prev_day_t, p1, net)  
-
-      petri_utils.add_arc_from_to(p1, t, net)
-      petri_utils.add_arc_from_to(t, p2, net)
-
-      if should_consider_reserves and is_reserve:
-        current_reserves.append(p2) # p2 must be linked to next_day_t on next iteration
-      else:
-        petri_utils.add_arc_from_to(p2, next_day_t, net)
-
-    prev_day_t = next_day_t
-
-  sink = PetriNet.Place('sink')
-  net.places.add(sink)
-  petri_utils.add_arc_from_to(prev_day_t, sink, net)
-
-  if should_consider_reserves:
-    # if some reserves are left, link them to sink
-    for reserve in current_reserves:
-      petri_utils.add_arc_from_to(reserve, next_day_t, net)
-    current_reserves = []
-
-  # inserisci token iniziali
-  im = Marking()
-  for source in sources:
-    im[source] = 1
-
-  fm = Marking()
-  fm[sink] = 1
-
-  return net, im, fm
+from build_petri_net import build_petri_net_for_week_department
 
 def compute_alignment(
   dataset,
@@ -114,12 +27,12 @@ def compute_alignment(
   skipped = []
 
   for year_week_department in tqdm(year_week_department_list):
-    # separa operazioni preventivate da effettuate
-    prev, act = dataset[dataset[SLICE_KEY] == SLICE_PREV_VAL], dataset[dataset[SLICE_KEY] == SLICE_ACTUAL_VAL]
+    # split dataset in planned and actual operations (plans and actuals)
+    plans, actuals = dataset[dataset[SLICE_KEY] == SLICE_PLAN_VAL], dataset[dataset[SLICE_KEY] == SLICE_ACTUAL_VAL]
 
     # costruisci la petri net
-    net, im, fm = build_petri_net_for_week(
-      prev,
+    net, im, fm = build_petri_net_for_week_department(
+      plans,
       year_week_department,
       should_consider_reserves=should_consider_reserves
     )
@@ -140,15 +53,13 @@ def compute_alignment(
       # log = pm4py.play_out(net, im, fm)
       # pm4py.write_xes(log, f'{year_week_department}.xes')
 
-    # filtra per year_week_department
-    act = act[act[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
-
-    # conversioni necessarie per evitare errori
-    act = prepare_df(act, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
+    # get actual operations for that specific week and department
+    actuals = actuals[actuals[YEAR_WEEK_DEPARTMENT_KEY] == year_week_department]
+    actuals = prepare_df(actuals, activity_key=ACTIVITY_KEY, timestamp_key=TIMESTAMP_KEY)
 
     # conformance checking
     alignment_res = fitness_alignments(
-      act,
+      actuals,
       net,
       im,
       fm,
